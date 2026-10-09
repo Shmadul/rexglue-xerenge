@@ -28,6 +28,10 @@
 #include <rex/logging.h>
 #include <rex/platform.h>
 #include <rex/ui/flags.h>
+#if REX_PLATFORM_MAC
+#include <SDL3/SDL_vulkan.h>
+#include "vulkan/vulkan_moltenvk.h"
+#endif
 #include <rex/ui/sdl_virtual_key.h>
 
 #if REX_PLATFORM_WIN32
@@ -110,12 +114,36 @@ WindowSDL::~WindowSDL() {
   DestroySDLWindow();
 }
 
+#if REX_PLATFORM_MAC
+// SDL_WINDOW_VULKAN makes SDL load a Vulkan library of its own, and it only
+// knows the system-wide names. The loader (macOS) or MoltenVK itself (iOS)
+// ships beside the executable instead, so hand SDL the path the runtime would
+// load, before the window exists. The renderer then reuses SDL's library.
+static void LoadSDLVulkanLibrary() {
+  if (SDL_Vulkan_GetVkGetInstanceProcAddr()) {
+    return;
+  }
+  const vulkan::MacOSVulkanRuntimePaths paths = vulkan::DetectMacOSVulkanRuntimePaths();
+  vulkan::ConfigureMacOSVulkanEnvironment(paths);
+  for (const std::filesystem::path& candidate : paths.loader_candidates) {
+    if (SDL_Vulkan_LoadLibrary(candidate.string().c_str())) {
+      REXLOG_INFO("SDL: Vulkan library {}", candidate.string());
+      return;
+    }
+    REXLOG_WARN("SDL: could not load Vulkan library {}: {}", candidate.string(), SDL_GetError());
+  }
+}
+#endif
+
 bool WindowSDL::OpenImpl() {
   // SDL window coordinates are physical pixels on Windows and X11. Cocoa
   // uses logical points and applies the backing scale itself.
   SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
   if (wants_vulkan_window()) {
     flags |= SDL_WINDOW_VULKAN;
+#if REX_PLATFORM_MAC
+    LoadSDLVulkanLibrary();
+#endif
   }
 #if REX_PLATFORM_MAC
   int initial_width = int(GetDesiredLogicalWidth());

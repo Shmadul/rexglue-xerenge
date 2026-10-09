@@ -178,6 +178,11 @@ elseif(UNIX AND NOT APPLE)
         set(REX_PLATFORM "linux-${REX_TARGET_PROCESSOR}")
     endif()
     add_compile_definitions(REX_PLATFORM_LINUX=1)
+elseif(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # The sources see iOS as REX_PLATFORM_MAC (TARGET_OS_MAC covers every Apple
+    # OS) and tell the two apart with REX_PLATFORM_IOS where they differ.
+    set(REX_PLATFORM "ios-arm64")
+    add_compile_definitions(REX_PLATFORM_MAC=1 REX_PLATFORM_IOS=1)
 elseif(APPLE)
     if(REX_TARGET_PROCESSOR MATCHES "AMD64|x86_64")
         set(REX_PLATFORM "mac-amd64")

@@ -16,6 +16,7 @@
 #endif
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <iterator>
@@ -29,7 +30,25 @@
 
 #if REX_PLATFORM_MAC
 #include <mach/mach.h>
+#if REX_PLATFORM_IOS
+// mach_vm.h is not in the iOS SDK; on 64-bit iOS the vm_* calls (mach.h) take
+// the same 64-bit addresses.
+static kern_return_t rex_mach_vm_region(vm_map_t task, mach_vm_address_t* address,
+                                        mach_vm_size_t* size, vm_region_flavor_t flavor,
+                                        vm_region_info_t info,
+                                        mach_msg_type_number_t* info_count,
+                                        mach_port_t* object_name) {
+  vm_address_t a = vm_address_t(*address);
+  vm_size_t sz = 0;
+  const kern_return_t kr = vm_region_64(task, &a, &sz, flavor, info, info_count, object_name);
+  *address = mach_vm_address_t(a);
+  *size = mach_vm_size_t(sz);
+  return kr;
+}
+#define mach_vm_region rex_mach_vm_region
+#else
 #include <mach/mach_vm.h>
+#endif
 #include <mach/vm_region.h>
 #endif  // REX_PLATFORM_MAC
 
@@ -643,6 +662,25 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
   oflag |= O_CREAT;
   auto full_path = MakeShmName(path);
   int ret = shm_open(full_path.c_str(), oflag, 0777);
+#if REX_PLATFORM_IOS
+  if (ret < 0) {
+    // The app sandbox may refuse POSIX shared memory. An unlinked sparse file
+    // in the app's own temporary directory gives the same descriptor-backed
+    // mapping; only the pages the title touches ever take space.
+    const char* tmp = std::getenv("TMPDIR");
+    std::string temp_path = std::string(tmp && *tmp ? tmp : "/tmp/") + "/rexmem.XXXXXX";
+    ret = mkstemp(temp_path.data());
+    if (ret < 0) {
+      return kFileMappingHandleInvalid;
+    }
+    unlink(temp_path.c_str());
+    if (rex_ftruncate64(ret, static_cast<off_t>(length)) != 0) {
+      close(ret);
+      return kFileMappingHandleInvalid;
+    }
+    return static_cast<FileMappingHandle>(ret);
+  }
+#endif
   if (ret < 0) {
     return kFileMappingHandleInvalid;
   }

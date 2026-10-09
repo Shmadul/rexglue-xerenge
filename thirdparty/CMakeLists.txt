@@ -4,6 +4,35 @@ include(${PROJECT_SOURCE_DIR}/cmake/rexglue_vulkan_stack.cmake)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 #=============================================================================
+# Patches to submodules that are not ours (patches/): applied to the checkout
+# at configure time, once - a patch already in place is left alone, and one
+# that no longer fits stops the configure rather than building without it.
+#=============================================================================
+find_package(Git QUIET)
+function(rex_apply_submodule_patch submodule patch)
+    set(dir "${CMAKE_CURRENT_SOURCE_DIR}/${submodule}")
+    set(file "${PROJECT_SOURCE_DIR}/patches/${patch}")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${file}"
+                    WORKING_DIRECTORY "${dir}" RESULT_VARIABLE already OUTPUT_QUIET ERROR_QUIET)
+    if(already EQUAL 0)
+        return()
+    endif()
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${file}"
+                    WORKING_DIRECTORY "${dir}" RESULT_VARIABLE failed ERROR_VARIABLE error)
+    if(failed)
+        message(FATAL_ERROR "patches/${patch} does not apply to thirdparty/${submodule}: ${error}")
+    endif()
+    message(STATUS "Applied patches/${patch} to thirdparty/${submodule}")
+endfunction()
+if(GIT_EXECUTABLE)
+    # The Apple configs' component lists, matched to the sources built below
+    # (the soundtrack's WMA and MP3 decoders on ARM, no network on x86).
+    rex_apply_submodule_patch(FFmpeg ffmpeg-apple-configs.patch)
+    # UIKit and CoreGraphics in place of AppKit and IOKit on iOS.
+    rex_apply_submodule_patch(moltenvk moltenvk-ios.patch)
+endif()
+
+#=============================================================================
 # Architecture detection
 #=============================================================================
 if(APPLE AND CMAKE_OSX_ARCHITECTURES)
@@ -211,8 +240,12 @@ if(REXGLUE_USE_VULKAN)
         set(LOADER_CODEGEN OFF CACHE BOOL "" FORCE)
         string(REGEX REPLACE "\\.[0-9]+$" "" VulkanHeaders_VERSION
             "${REXGLUE_VULKAN_SDK_VERSION}")
-        add_subdirectory(vulkan-loader EXCLUDE_FROM_ALL)
-        set_target_properties(vulkan PROPERTIES EXCLUDE_FROM_ALL FALSE)
+        # iOS has no Vulkan loader: MoltenVK, embedded in the app, is loaded
+        # directly as the Vulkan library.
+        if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            add_subdirectory(vulkan-loader EXCLUDE_FROM_ALL)
+            set_target_properties(vulkan PROPERTIES EXCLUDE_FROM_ALL FALSE)
+        endif()
 
         set(MVK_BUILD_SHADER_CONVERTER_TOOL OFF CACHE BOOL "" FORCE)
         set(MVK_EXCLUDE_SPIRV_TOOLS ON CACHE BOOL "" FORCE)

@@ -47,6 +47,13 @@
 #ifndef REX_PLATFORM_MAC
 #define REX_PLATFORM_MAC 0
 #endif
+#ifndef REX_PLATFORM_IOS
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
+#define REX_PLATFORM_IOS 1
+#else
+#define REX_PLATFORM_IOS 0
+#endif
+#endif
 #ifndef REX_PLATFORM_WIN32
 #define REX_PLATFORM_WIN32 0
 #endif

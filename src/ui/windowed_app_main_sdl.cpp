@@ -134,6 +134,34 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* a
   return RunWindowedApp(argc, argv);
 }
 
+#elif REX_PLATFORM_IOS
+
+// UIKit owns the process's main thread: SDL_RunApp starts UIApplicationMain
+// and calls back into the app once it has launched.
+#define SDL_MAIN_HANDLED
+#include <SDL3/SDL_main.h>
+
+// An iOS app is launched without arguments or environment, so the title may
+// supply both (paths into its sandbox, renderer switches) by defining this.
+extern "C" void RexIOSPrepareLaunch(std::vector<std::string>* args) __attribute__((weak));
+
+static int RexIOSMain(int argc, char* argv[]) {
+  std::vector<std::string> args(argv, argv + argc);
+  if (RexIOSPrepareLaunch) {
+    RexIOSPrepareLaunch(&args);
+  }
+  std::vector<char*> arg_ptrs;
+  arg_ptrs.reserve(args.size());
+  for (std::string& arg : args) {
+    arg_ptrs.push_back(arg.data());
+  }
+  return RunWindowedApp(int(arg_ptrs.size()), arg_ptrs.data());
+}
+
+int main(int argc, char* argv[]) {
+  return SDL_RunApp(argc, argv, RexIOSMain, nullptr);
+}
+
 #else
 
 int main(int argc, char* argv[]) {

@@ -44,9 +44,10 @@ bool SDLWindowedAppContext::Initialize() {
   // which surface extensions it has, so the cvar is the escape hatch.
   std::string requested_driver = REXCVAR_GET(video_driver);
 #if REX_PLATFORM_MAC
-  // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
+  // Apple platforms present via a CAMetalLayer surface obtained from the
+  // native driver: Cocoa on macOS, UIKit on iOS.
   if (requested_driver.empty()) {
-    requested_driver = "cocoa";
+    requested_driver = REX_PLATFORM_IOS ? "uikit" : "cocoa";
   }
 #endif
   if (!requested_driver.empty()) {
