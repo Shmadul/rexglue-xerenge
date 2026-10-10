@@ -618,7 +618,25 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
 
 FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,
                                           PageAccess access, bool commit) {
-#if REX_PLATFORM_ANDROID
+#if REX_PLATFORM_IOS
+  // The app sandbox refuses POSIX shared memory, and a file in its place has
+  // every page the title writes flushed to flash: gigabytes an hour, I/O
+  // stalls that froze the game, and iOS's disk-write reports. A named Mach
+  // memory entry is the same shareable object in RAM alone; the views are
+  // mapped from its port (MapFileView), which stands in for the descriptor.
+  memory_object_size_t size = length;
+  mach_port_t entry = MACH_PORT_NULL;
+  const kern_return_t kr = mach_make_memory_entry_64(
+      mach_task_self(), &size, 0, MAP_MEM_NAMED_CREATE | VM_PROT_READ | VM_PROT_WRITE, &entry,
+      MACH_PORT_NULL);
+  if (kr != KERN_SUCCESS || size < length) {
+    return kFileMappingHandleInvalid;
+  }
+  (void)path;
+  (void)access;
+  (void)commit;
+  return static_cast<FileMappingHandle>(entry);
+#elif REX_PLATFORM_ANDROID
   // TODO(Triang3l): Check if memfd can be used instead on API 30+.
   if (android_ASharedMemory_create_) {
     int sharedmem_fd = android_ASharedMemory_create_(path.c_str(), length);
@@ -662,25 +680,6 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
   oflag |= O_CREAT;
   auto full_path = MakeShmName(path);
   int ret = shm_open(full_path.c_str(), oflag, 0777);
-#if REX_PLATFORM_IOS
-  if (ret < 0) {
-    // The app sandbox may refuse POSIX shared memory. An unlinked sparse file
-    // in the app's own temporary directory gives the same descriptor-backed
-    // mapping; only the pages the title touches ever take space.
-    const char* tmp = std::getenv("TMPDIR");
-    std::string temp_path = std::string(tmp && *tmp ? tmp : "/tmp/") + "/rexmem.XXXXXX";
-    ret = mkstemp(temp_path.data());
-    if (ret < 0) {
-      return kFileMappingHandleInvalid;
-    }
-    unlink(temp_path.c_str());
-    if (rex_ftruncate64(ret, static_cast<off_t>(length)) != 0) {
-      close(ret);
-      return kFileMappingHandleInvalid;
-    }
-    return static_cast<FileMappingHandle>(ret);
-  }
-#endif
   if (ret < 0) {
     return kFileMappingHandleInvalid;
   }
@@ -700,6 +699,11 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
 }
 
 void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path) {
+#if REX_PLATFORM_IOS
+  mach_port_deallocate(mach_task_self(), static_cast<mach_port_t>(handle));
+  (void)path;
+  return;
+#endif
   close(static_cast<int>(handle));
 #if !REX_PLATFORM_ANDROID
   auto full_path = MakeShmName(path);
@@ -725,11 +729,27 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
   }
 
   uint32_t prot = ToPosixProtectFlags(access);
+#if REX_PLATFORM_IOS
+  // From the memory entry (CreateFileMappingHandle), over the reservation the
+  // same way MAP_FIXED replaces it. PROT_* and VM_PROT_* share their bits.
+  vm_address_t address = reinterpret_cast<vm_address_t>(base_address);
+  const kern_return_t kr = vm_map(
+      mach_task_self(), &address, length, 0,
+      base_address ? VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE : VM_FLAGS_ANYWHERE,
+      static_cast<mem_entry_name_port_t>(handle), static_cast<vm_offset_t>(file_offset), FALSE,
+      static_cast<vm_prot_t>(prot), VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+  void* result = kr == KERN_SUCCESS ? reinterpret_cast<void*>(address) : nullptr;
+  (void)flags;
+  if (!result) {
+    return nullptr;
+  }
+#else
   void* result = rex_mmap64(base_address, length, prot, flags, static_cast<int>(handle),
                             static_cast<off_t>(file_offset));
   if (result == MAP_FAILED) {
     return nullptr;
   }
+#endif
 
   // Verify we got the address we asked for
   if (base_address && result != base_address) {
